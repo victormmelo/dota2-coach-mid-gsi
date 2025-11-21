@@ -109,6 +109,7 @@ type Strategy struct {
 }
 
 var strategies = []Strategy{
+	// --- EARLY GAME ---
 	{100, 125, "💧 ALERTA: Runa de Água (Min 2)", true},
 	{165, 195, "🟡 IMPORTANTE: Bounty Rune + Watcher (Min 3)", true},
 	{230, 245, "💧 ALERTA: Runa de Água (Min 4)", true},
@@ -117,7 +118,26 @@ var strategies = []Strategy{
 	{390, 450, "🧠 ALERTA: Altar da Sabedoria (Min 7) - Não perca XP!", true},
 	{450, 490, "⚡ TÁTICA: Preparar Runa de Poder (8:00) + Watcher", false},
 	{530, 550, "🟡 ALERTA: Bounty Rune (Min 9)", false},
-	{590, 610, "⚡ ALERTA: Power Rune (Min 10) + Catapulta", true},
+	{590, 630, "⚡ ALERTA: Power Rune (Min 10) + Catapulta", true},
+
+	// --- MID GAME TRANSITION (10-20 min) ---
+
+	// Min 10-12: Defesa de Torre
+	{630, 720, "🛡️ MACRO: Defenda T1 Mid! Empurre waves e rotacione para Safe Lane.", false},
+
+	// Min 14: Wisdom Rune (CRÍTICO)
+	// Começa avisar 13:30 (810s) até 14:15 (855s)
+	{810, 855, "🧠 CRÍTICO: Wisdom Rune (Min 14)! Roube a do inimigo se puder.", true},
+
+	// Min 15: Bounty
+	{880, 915, "🟡 ALERTA: Bounty Rune (Min 15)", false},
+
+	// Min 16-19: Power Spike / Lótus
+	{960, 1140, "⚔️ DECISÃO: Tem item Core (Blink/BKB)? SIM: Smoke/Luta | NÃO: Farma!", false},
+
+	// Min 20: Tormentor (Shard)
+	// Avisa 19:30 (1170s) até 20:30 (1230s)
+	{1170, 1230, "💎 OBJETIVO: Tormentor (Min 20) = Shard Grátis! Chame o time.", true},
 }
 
 // --- MAIN ---

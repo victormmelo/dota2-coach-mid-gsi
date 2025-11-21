@@ -1,31 +1,70 @@
-# Informações
- - Waves chegam no mid no segundo 20 e 50
+# Early Game (00:00 - 10:00)
+# Informações Gerais
+- Waves chegam no mid no segundo 20 e 50.
+- Catapultas nascem a cada 5 minutos (Wave das 5:00, 10:00...).
 
-# Estratégias para objetivos pelo tempo de jogo
+# Monitoramento Constante (O Coach avisa se faltar)
+- **TP Scroll:** Tenha sempre um TP ou Boots of Travel.
+- **Magic Wand:** O Coach avisa para usar se estiver carregada e você com pouca vida.
+- **Regen de HP:** Até os 5 min, tenha sempre Tango, Salve ou Bottle.
+- **Regen de Mana:** Entre 2 e 5 min, tenha sempre Clarity, Mango ou Bottle.
 
-### 1. Runa de água minuto 2
- - Preciso ter 675 de gold até o minuto 1:20 para comprar a bottle e pegar as runas do minuto 2, pois o bottle demora 25 segundos para chegar, geralmente consigo isso dando 6 last hits nas duas primeiras waves
- - Faltando 10 segundos para o minuto 2 já preciso me organizar para pegar as runas
+# Estratégias por Tempo de Jogo
 
-### 2. Runa de gold minuto 3
- - Minuto 3 Pegar a bounty e ativar a watcher
+### 1. Runa de Água (Minuto 2)
+- **Meta:** Ter 675 gold até 1:20 para Bottle chegar a tempo.
+- **Ação:** Faltando 10s, posicione-se para garantir uma das águas.
 
-### 3. Runa de água minuto 4 
- - Faltando 10 segundos para o minuto 4 se preparar para pegar a runa de água
+### 2. Runa de Ouro / Bounty (Minuto 3)
+- **Alerta Crítico:** Começa a avisar aos 2:45.
+- **Ação:** Pegar a Bounty e, se possível, ativar a Watcher.
 
-### 4. Stack no triangulo no minuto 5
- - Avançar a wave de 4:20 para fazer stack no triangulo no minuto 5
+### 3. Runa de Água (Minuto 4)
+- **Ação:** Preparar aos 3:50 para garantir a recarga da Bottle.
 
-### 5. Runas de poder no minuto 6 e runa de gold
- - Se preparar para as runas de poder que nascem no minuto 6, se possível pedir ao 5:30 para o suporte já se movimentar em direção ao mid para garantir a runa, após isso pegar a runa de gold e ativar a watcher se possível
+### 4. Stack no Triângulo (Minuto 5)
+- **Ação:** Avançar a wave de 4:20 violentamente para stackar o triângulo no minuto 5:00.
 
-### 6. Altar da sabedoria no minuto 7
- - Ir para o altar da sabedoria do meu time para pega-lo, movimentar antes do minuto 7 para chegar a tempo
+### 5. O COMBO "ALL-IN" (Minuto 6)
+- **Contexto:** A wave das 5:00 traz uma Catapulta que chega no mid ~5:30.
+- **Execução (5:10 - 6:00):**
+  1. Pedir gank do suporte aos 5:10.
+  2. Matar o Mid inimigo ou forçá-lo base.
+  3. Usar a Catapulta para bater na Torre sem contestação.
+  4. Pegar a Runa de Poder aos 6:00.
 
-### 7. Runa de poder no minuto 8
- - Avançar a wave do mid do minuto 7:50 e pegar a runa de poder no minuto 8
+### 6. Altar da Sabedoria / Wisdom (Minuto 7)
+- **Alerta Estendido:** O aviso fica na tela até 7:30.
+- **Ação:** É XP grátis e vital. Se o suporte não for, você vai. Roubar a do inimigo é o ideal se estiver forte.
 
-### 8. Runa de gold no minuto 9
- - Pegar a runa de gold no minuto 9 e ativar a watcher se possível
+### 7. Runa de Poder (Minuto 8)
+- **Preparação Antecipada:** O alerta começa já aos 7:30 (assim que acaba o Wisdom).
+- **Ação:** Avançar a wave das 7:50 para ter prioridade na runa.
 
-### 9. Runa de poder no minuto 10 e ativar a watcher se possível
+### 8. Runa de Ouro (Minuto 9)
+- **Ação:** Pegar a Bounty e reativar Watchers.
+
+### 9. Runa de Poder + Catapulta (Minuto 10)
+- **Ação:** Nova onda de Catapulta + Runa de Poder. Repetir a agressividade do minuto 6 se tiver ult.
+
+# Mid Game (10:00 - 20:00)
+
+### 10. Defesa da Torre Mid (10:00 - 12:00)
+- **Conceito:** A catapulta das 10:00 é forte. Não deixe o inimigo levar sua torre.
+- **Ação:** Limpe a wave rapidamente. Se o inimigo sumir, avise "SS".
+
+### 11. Rotação para T1 das Pontas (12:00 - 14:00)
+- **Objetivo:** Abrir o mapa.
+- **Ação:** Gankar a Safe Lane inimiga (matar o Carry deles) e levar a torre T1. Isso tira o espaço de farm deles.
+
+### 12. Wisdom Rune (Minuto 14)
+- **CRÍTICO:** Aos 14:00 nascem as runas de XP.
+- **Ação:** Se você estiver forte, invada a selva inimiga e roube a Wisdom deles. Se não, garanta a do seu time com o suporte.
+
+### 13. Power Spike Check (15:00 - 18:00)
+- **Análise:** Você tem seu item principal (Blink, BKB, Orchid)?
+- **Regra de Ouro:** Se SIM -> Fume (Smoke) e force lutas. Se NÃO -> Evite lutas e farme o item. Não lute "quase" pronto.
+
+### 14. Tormentor & Roshan (Minuto 20)
+- **Objetivo:** Shard Grátis.
+- **Ação:** Aos 19:45, reúna o time (ou chame os suportes) para fazer o Tormentor instantaneamente aos 20:00.
