@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  # O nosso código Go vai rodar aqui ou localmente conectando nestes serviços.
+  # Para desenvolvimento, vamos rodar o Go na máquina (WSL) e conectar nos serviços abaixo.
+
+  redis:
+    image: redis:alpine
+    container_name: dota_redis
+    ports:
+      - "6380:6379"
+
+  mongodb:
+    image: mongo:latest
+    container_name: dota_mongo
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: rootpassword
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  mongo-express:
+    image: mongo-express
+    container_name: dota_mongo_gui
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      # --- Credenciais para acessar o SITE (Mongo Express) ---
+      ME_CONFIG_BASICAUTH_USERNAME: viturino
+      ME_CONFIG_BASICAUTH_PASSWORD: dota
+      
+      # --- Credenciais para o Mongo Express conectar no BANCO ---
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: rootpassword
+      ME_CONFIG_MONGODB_URL: mongodb://root:rootpassword@mongodb:27017/
+    depends_on:
+      - mongodb
+
+volumes:
+  mongo_data:
