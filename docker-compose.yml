@@ -1,15 +1,16 @@
 version: '3.8'
 
 services:
-  # O nosso código Go vai rodar aqui ou localmente conectando nestes serviços.
-  # Para desenvolvimento, vamos rodar o Go na máquina (WSL) e conectar nos serviços abaixo.
-
+  # --- BANCO DE DADOS (REDIS) ---
   redis:
     image: redis:alpine
     container_name: dota_redis
     ports:
-      - "6380:6379"
+      - "6380:6379" # Externo 6380, Interno 6379
+    networks:
+      - dota-net
 
+  # --- BANCO DE DADOS (MONGO - Opcional se ainda estiver usando) ---
   mongodb:
     image: mongo:latest
     container_name: dota_mongo
@@ -21,24 +22,45 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+    networks:
+      - dota-net
 
-  mongo-express:
-    image: mongo-express
-    container_name: dota_mongo_gui
-    restart: always
+  # --- BACKEND (GOLANG) ---
+  backend:
+    container_name: dota_backend
+    build: . # Constrói usando o Dockerfile na raiz
     ports:
-      - "8081:8081"
+      - "8080:8080" # Mapeia 8080 do PC para 8080 do container
     environment:
-      # --- Credenciais para acessar o SITE (Mongo Express) ---
-      ME_CONFIG_BASICAUTH_USERNAME: viturino
-      ME_CONFIG_BASICAUTH_PASSWORD: dota
-      
-      # --- Credenciais para o Mongo Express conectar no BANCO ---
-      ME_CONFIG_MONGODB_ADMINUSERNAME: root
-      ME_CONFIG_MONGODB_ADMINPASSWORD: rootpassword
-      ME_CONFIG_MONGODB_URL: mongodb://root:rootpassword@mongodb:27017/
+      # AQUI ESTÁ A MÁGICA:
+      # O Go vai procurar o redis no host "redis" (nome do serviço acima), porta interna 6379
+      - REDIS_ADDR=redis:6379 
     depends_on:
-      - mongodb
+      - redis
+    volumes:
+      - ./:/app # Sincroniza código local com container (Hot Reload do Go se usar Air, ou restart manual)
+    networks:
+      - dota-net
+
+  # --- FRONTEND (NEXT.JS) ---
+  frontend:
+    container_name: dota_frontend
+    build: ./dota-dashboard # Constrói usando o Dockerfile da pasta dota-dashboard
+    ports:
+      - "3006:3000"
+    volumes:
+      - ./dota-dashboard:/app # Sincroniza código para editar em tempo real
+      - /app/node_modules # Evita sobrescrever node_modules do container com o local
+    environment:
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8080/ws
+    depends_on:
+      - backend
+    networks:
+      - dota-net
 
 volumes:
   mongo_data:
+
+networks:
+  dota-net:
+    driver: bridge

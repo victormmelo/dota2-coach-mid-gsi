@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -16,8 +17,17 @@ import (
 )
 
 // --- CONFIGURAÇÕES ---
-const (
-	RedisAddr     = "localhost:6380"
+// Vamos pegar das variáveis de ambiente ou usar o padrão (localhost) se não tiver
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
+
+var (
+	// Dentro do Docker usaremos "dota_redis:6379". Fora, "localhost:6380"
+	RedisAddr     = getEnv("REDIS_ADDR", "localhost:6380")
 	RedisQueueKey = "dota_live_queue"
 	ServerPort    = ":8080"
 )
