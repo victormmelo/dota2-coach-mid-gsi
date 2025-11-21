@@ -7,14 +7,16 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
 )
 
 // --- CONFIGURAÇÕES ---
 const (
-	RedisAddr     = "localhost:6380" // Sua porta configurada no Docker
+	RedisAddr     = "localhost:6380"
 	RedisQueueKey = "dota_live_queue"
 	ServerPort    = ":8080"
 )
@@ -22,42 +24,53 @@ const (
 var (
 	ctx = context.Background()
 	rdb *redis.Client
+
+	// WebSocket Hub (Gerencia conexões com o Frontend)
+	clients   = make(map[*websocket.Conn]bool)
+	broadcast = make(chan DashboardData)
+	upgrader  = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true }, // Libera CORS para o Next.js
+	}
+	mutex = &sync.Mutex{}
 )
 
-// --- ESTRUTURAS DE DADOS (Baseadas no seu JSON de Jogador) ---
+// --- ESTRUTURAS DE DADOS ---
+// Payload que será enviado para o Next.js
+type DashboardData struct {
+	HeroName       string `json:"hero_name"`
+	ClockTime      int    `json:"clock_time"`
+	ClockDisplay   string `json:"clock_display"`
+	StrategyText   string `json:"strategy_text"`
+	StrategyWarn   bool   `json:"strategy_warn"`
+	HealthPercent  int    `json:"health_percent"`
+	ManaPercent    int    `json:"mana_percent"`
+	Gold           int    `json:"gold"`
+	BuybackStatus  string `json:"buyback_status"` // "READY", "COOLDOWN", "NO_GOLD"
+	BuybackMissing int    `json:"buyback_missing"`
+	GPM            int    `json:"gpm"`
+	KDA            string `json:"kda"`
+	WandAlert      bool   `json:"wand_alert"`
+}
 
+// Estruturas do GSI
 type LiveGameState struct {
-	Provider Provider `json:"provider"`
-	Map      Map      `json:"map"`
-	Player   Player   `json:"player"`
-	Hero     Hero     `json:"hero"`
-	Items    Items    `json:"items"`
+	Map    Map    `json:"map"`
+	Player Player `json:"player"`
+	Hero   Hero   `json:"hero"`
+	Items  Items  `json:"items"`
 }
-
-type Provider struct {
-	Timestamp int `json:"timestamp"`
-}
-
 type Map struct {
 	ClockTime int    `json:"clock_time"`
 	GameState string `json:"game_state"`
-	Paused    bool   `json:"paused"`
-	MatchID   string `json:"matchid"`
 }
-
 type Player struct {
-	Gold           int    `json:"gold"`
-	GoldReliable   int    `json:"gold_reliable"`
-	GoldUnreliable int    `json:"gold_unreliable"`
-	GPM            int    `json:"gpm"`
-	XPM            int    `json:"xpm"`
-	Name           string `json:"name"`
-	Activity       string `json:"activity"` // "playing", "dead"
-	Kills          int    `json:"kills"`
-	Deaths         int    `json:"deaths"`
-	Assists        int    `json:"assists"`
+	Gold    int    `json:"gold"`
+	GPM     int    `json:"gpm"`
+	Kills   int    `json:"kills"`
+	Deaths  int    `json:"deaths"`
+	Assists int    `json:"assists"`
+	Name    string `json:"name"`
 }
-
 type Hero struct {
 	Name            string `json:"name"`
 	Level           int    `json:"level"`
@@ -70,233 +83,191 @@ type Hero struct {
 	ManaPercent     int    `json:"mana_percent"`
 	BuybackCost     int    `json:"buyback_cost"`
 	BuybackCooldown int    `json:"buyback_cooldown"`
-	RespawnSeconds  int    `json:"respawn_seconds"`
 }
-
-// Mapeamento direto dos itens que estão na raiz do objeto "items"
 type Items struct {
-	Slot0    Item `json:"slot0"`
-	Slot1    Item `json:"slot1"`
-	Slot2    Item `json:"slot2"`
-	Slot3    Item `json:"slot3"`
-	Slot4    Item `json:"slot4"`
-	Slot5    Item `json:"slot5"`
-	Teleport Item `json:"teleport0"`
-	Neutral  Item `json:"neutral0"`
+	Slot0 Item `json:"slot0"`
+	Slot1 Item `json:"slot1"`
+	Slot2 Item `json:"slot2"`
+	Slot3 Item `json:"slot3"`
+	Slot4 Item `json:"slot4"`
+	Slot5 Item `json:"slot5"`
 }
-
 type Item struct {
-	Name     string `json:"name"`
-	CanCast  bool   `json:"can_cast"`
-	Cooldown int    `json:"cooldown"`
-	Charges  int    `json:"charges"` // Importante para Wand/Stick
-	Passive  bool   `json:"passive"`
+	Name    string `json:"name"`
+	Charges int    `json:"charges"`
 }
 
-// --- FUNÇÃO PRINCIPAL ---
+// --- ESTRATÉGIAS (Baseado no seu arquivo MD) ---
+type Strategy struct {
+	StartTime, EndTime int
+	Message            string
+	Warning            bool
+}
 
+var strategies = []Strategy{
+	{0, 80, "💰 META: 675 Gold (Bottle) até 1:20", false},
+	{100, 125, "💧 ALERTA: Runa de Água (Min 2)", true},
+	{170, 190, "🟡 ALERTA: Bounty Rune (Min 3)", false},
+	{230, 245, "💧 ALERTA: Runa de Água (Min 4)", true},
+	{250, 300, "⚠️ TÁTICA: Stack Triângulo (Min 5)", true},
+	{330, 360, "🗣️ COMANDO: Pedir Sup Mid -> Power Rune (6:00)", false},
+	{390, 420, "🧠 ALERTA: Altar da Sabedoria (Min 7)", true},
+	{460, 485, "⚔️ TÁTICA: Avançar wave -> Power Rune (8:00)", false},
+	{530, 550, "🟡 ALERTA: Bounty Rune (Min 9)", false},
+	{590, 610, "⚡ ALERTA: Power Rune (Min 10)", true},
+}
+
+// --- MAIN ---
 func main() {
-	// 1. Conectar ao Redis
-	rdb = redis.NewClient(&redis.Options{
-		Addr: RedisAddr,
-	})
+	rdb = redis.NewClient(&redis.Options{Addr: RedisAddr})
 
-	// Teste de conexão
-	_, err := rdb.Ping(ctx).Result()
-	if err != nil {
-		log.Fatalf("❌ Erro ao conectar no Redis (%s): %v", RedisAddr, err)
-	}
+	fmt.Println("🚀 Dota 2 WebSocket Server Rodando!")
+	fmt.Println("📡 GSI Input: :8080/ | WebSocket Output: :8080/ws")
 
-	fmt.Println("🚀 Dota 2 Live Coach Iniciado!")
-	fmt.Println("📡 Ouvindo na porta 8080 e processando via Redis...")
-
-	// 2. Iniciar o Worker (Consumidor) em paralelo
 	go startWorker()
+	go handleMessages() // Gerencia envio para o frontend
 
-	// 3. Iniciar o Servidor HTTP (Produtor)
-	http.HandleFunc("/", handleIngest)
+	http.HandleFunc("/", handleIngest)      // Recebe do Dota
+	http.HandleFunc("/ws", handleWebSocket) // Conecta com Next.js
+
 	if err := http.ListenAndServe(ServerPort, nil); err != nil {
 		log.Fatal(err)
 	}
 }
 
-// --- PRODUTOR (HTTP -> REDIS) ---
+// --- HANDLERS HTTP/WS ---
+
+func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	ws, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer ws.Close()
+
+	mutex.Lock()
+	clients[ws] = true
+	mutex.Unlock()
+
+	// Mantém conexão viva
+	for {
+		_, _, err := ws.ReadMessage()
+		if err != nil {
+			mutex.Lock()
+			delete(clients, ws)
+			mutex.Unlock()
+			break
+		}
+	}
+}
+
 func handleIngest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		return
 	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return
-	}
+	body, _ := io.ReadAll(r.Body)
 	defer r.Body.Close()
-
-	// Joga na fila do Redis imediatamente (LPUSH)
-	// Usamos LPush para inserir na cabeça da lista, mas idealmente
-	// se quisermos processar na ordem, o worker fará RPOP (ou BRPop no final)
-	// Aqui vamos jogar e deixar o worker pegar.
 	rdb.LPush(ctx, RedisQueueKey, string(body))
-
 	w.WriteHeader(http.StatusOK)
 }
 
-// --- CONSUMIDOR (WORKER -> DASHBOARD) ---
-func startWorker() {
-	fmt.Println("⚙️  Worker de Análise rodando...")
-
-	for {
-		// BRPop bloqueia até chegar um dado na fila (Timeout 0 = infinito)
-		result, err := rdb.BRPop(ctx, 0, RedisQueueKey).Result()
-		if err != nil {
-			// Se der erro de conexão, espera um pouco e tenta de novo
-			time.Sleep(1 * time.Second)
-			continue
+func handleMessages() {
+	for data := range broadcast {
+		mutex.Lock()
+		for client := range clients {
+			err := client.WriteJSON(data)
+			if err != nil {
+				client.Close()
+				delete(clients, client)
+			}
 		}
-
-		// result[1] contém o JSON
-		jsonStr := result[1]
-		processLiveMatch(jsonStr)
+		mutex.Unlock()
 	}
 }
 
-// --- LÓGICA DO COACH ---
+// --- WORKER ---
+
+func startWorker() {
+	fmt.Println("⚙️  Worker aguardando dados do Dota...")
+	for {
+		result, err := rdb.BRPop(ctx, 0, RedisQueueKey).Result()
+		if err != nil {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		processLiveMatch(result[1])
+	}
+}
 
 func processLiveMatch(jsonStr string) {
 	var g LiveGameState
 	if err := json.Unmarshal([]byte(jsonStr), &g); err != nil {
 		return
 	}
-
-	// Filtro: Só mostra dashboard se o jogo estiver rolando
 	if g.Map.GameState != "DOTA_GAMERULES_STATE_GAME_IN_PROGRESS" {
-		if g.Map.GameState == "DOTA_GAMERULES_STATE_PRE_GAME" {
-			fmt.Print("\033[H\033[2J") // Limpa tela
-			fmt.Println("⏳ FASE DE PREPARAÇÃO")
-			fmt.Println("-> Verifique seus itens iniciais.")
-			fmt.Println("-> Planeje a disputa da Runa de Água/Bounty.")
-		}
 		return
 	}
 
-	// Limpa o terminal para efeito de atualização em tempo real
-	// (Funciona no WSL/Linux/Mac)
-	fmt.Print("\033[H\033[2J")
-
-	// Formatação de tempo
+	// Prepara os dados para o Dashboard
 	clock := g.Map.ClockTime
-	minutes := clock / 60
-	seconds := clock % 60
-	if seconds < 0 {
-		seconds *= -1
-	} // Correção para tempo negativo (antes do 0:00)
-
-	// --- CABEÇALHO ---
-	fmt.Println("========================================")
-	fmt.Printf("  DOTA 2 LIVE COACH  |  %02d:%02d\n", minutes, seconds)
-	fmt.Println("========================================")
-
-	fmt.Printf("HERÓI: %-15s LVL: %d\n", cleanName(g.Hero.Name), g.Hero.Level)
-	fmt.Printf("K/D/A: %d/%d/%d          GPM: %d\n", g.Player.Kills, g.Player.Deaths, g.Player.Assists, g.Player.GPM)
-	fmt.Println("----------------------------------------")
-
-	// --- 1. MONITOR DE VITAIS (HP/MANA) ---
-	printVitals(g)
-
-	// --- 2. CALCULADORA DE BUYBACK (CRÍTICO) ---
-	printBuybackStatus(g)
-
-	// --- 3. ALERTA DE ITENS (WAND) ---
-	checkEmergencyItems(g)
-
-	fmt.Println("\n----------------------------------------")
-	fmt.Println(" (Ctrl+C para encerrar o Coach)")
-}
-
-func printVitals(g LiveGameState) {
-	// Cores ANSI
-	red := "\033[31m"
-	green := "\033[32m"
-	yellow := "\033[33m"
-	blue := "\033[36m"
-	reset := "\033[0m"
-
-	// Lógica HP
-	hpColor := green
-	if g.Hero.HealthPercent < 30 {
-		hpColor = red // Crítico
-	} else if g.Hero.HealthPercent < 60 {
-		hpColor = yellow // Atenção
+	mins, secs := clock/60, clock%60
+	if secs < 0 {
+		secs *= -1
 	}
 
-	// Lógica Mana
-	manaColor := blue
-	if g.Hero.ManaPercent < 20 {
-		manaColor = red // Sem mana
-	}
-
-	status := "VIVO"
-	if !g.Hero.Alive {
-		status = fmt.Sprintf("%sMORTO (%ds)%s", red, g.Hero.RespawnSeconds, reset)
-	}
-
-	fmt.Printf("STATUS: %s\n", status)
-	fmt.Printf("HP:   %s%3d%% (%d/%d)%s\n", hpColor, g.Hero.HealthPercent, g.Hero.Health, g.Hero.MaxHealth, reset)
-	fmt.Printf("MANA: %s%3d%% (%d/%d)%s\n", manaColor, g.Hero.ManaPercent, g.Hero.Mana, g.Hero.MaxMana, reset)
-}
-
-func printBuybackStatus(g LiveGameState) {
-	// Só calculamos buyback se o jogo tiver passado de 10 min ou se o custo for relevante
-	if g.Map.ClockTime < 600 {
-		return
-	}
-
-	fmt.Println("\n--- ECONOMIA & BUYBACK ---")
-
-	cost := g.Hero.BuybackCost
-	currentGold := g.Player.Gold
-	surplus := currentGold - cost
-
-	// Cores
-	red := "\033[31m"   // Perigo
-	green := "\033[32m" // Seguro
-	bgRed := "\033[41m" // Fundo Vermelho (Alerta Máximo)
-	reset := "\033[0m"
-
-	fmt.Printf("Ouro Atual: %d | Custo BB: %d\n", currentGold, cost)
-
-	if g.Hero.BuybackCooldown > 0 {
-		fmt.Printf("Estado: %sEM RECARGA (%ds)%s\n", red, g.Hero.BuybackCooldown, reset)
-	} else if surplus >= 0 {
-		fmt.Printf("Estado: %sDISPONÍVEL (+%d gold)%s\n", green, surplus, reset)
-	} else {
-		// Alerta visual forte
-		fmt.Printf("%s⚠️  SEM BUYBACK! FALTA %d DE OURO ⚠️%s\n", bgRed, surplus*-1, reset)
-	}
-}
-
-func checkEmergencyItems(g LiveGameState) {
-	// Verifica se tem Magic Wand/Stick com muitas cargas e pouca vida
-	checkWand := func(i Item) {
-		isWand := (i.Name == "item_magic_wand" || i.Name == "item_magic_stick")
-		if isWand && i.Charges >= 10 && g.Hero.HealthPercent < 40 && g.Hero.Alive {
-			fmt.Printf("\n✨ \033[33mUSE SUA WAND! (%d Cargas)\033[0m ✨\n", i.Charges)
+	// 1. Estratégia Atual
+	stratText := "Foco no Farm / Lane Control"
+	stratWarn := false
+	for _, s := range strategies {
+		if clock >= s.StartTime && clock <= s.EndTime {
+			stratText = s.Message
+			stratWarn = s.Warning
+			break
 		}
 	}
 
-	// Verifica slots principais
+	// 2. Lógica de Buyback
+	bbStatus := "READY"
+	bbMissing := 0
+	surplus := g.Player.Gold - g.Hero.BuybackCost
+	if g.Hero.BuybackCooldown > 0 {
+		bbStatus = "COOLDOWN"
+	} else if surplus < 0 {
+		bbStatus = "NO_GOLD"
+		bbMissing = surplus * -1
+	}
+
+	// 3. Magic Wand Check
+	wandAlert := false
+	checkWand := func(i Item) {
+		if (i.Name == "item_magic_wand" || i.Name == "item_magic_stick") && i.Charges >= 10 && g.Hero.HealthPercent < 40 {
+			wandAlert = true
+		}
+	}
 	checkWand(g.Items.Slot0)
 	checkWand(g.Items.Slot1)
 	checkWand(g.Items.Slot2)
 	checkWand(g.Items.Slot3)
 	checkWand(g.Items.Slot4)
 	checkWand(g.Items.Slot5)
-}
 
-// Função auxiliar para limpar nomes (ex: "npc_dota_hero_axe" -> "AXE")
-func cleanName(raw string) string {
-	if len(raw) > 14 {
-		return raw[14:] // Remove "npc_dota_hero_"
+	// Monta o pacote
+	data := DashboardData{
+		HeroName:       g.Hero.Name,
+		ClockTime:      clock,
+		ClockDisplay:   fmt.Sprintf("%02d:%02d", mins, secs),
+		StrategyText:   stratText,
+		StrategyWarn:   stratWarn,
+		HealthPercent:  g.Hero.HealthPercent,
+		ManaPercent:    g.Hero.ManaPercent,
+		Gold:           g.Player.Gold,
+		BuybackStatus:  bbStatus,
+		BuybackMissing: bbMissing,
+		GPM:            g.Player.GPM,
+		KDA:            fmt.Sprintf("%d/%d/%d", g.Player.Kills, g.Player.Deaths, g.Player.Assists),
+		WandAlert:      wandAlert,
 	}
-	return raw
+
+	// Envia para o WebSocket
+	broadcast <- data
 }
