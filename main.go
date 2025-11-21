@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,20 +23,15 @@ const (
 )
 
 var (
-	ctx = context.Background()
-	rdb *redis.Client
-
-	// WebSocket Hub (Gerencia conexões com o Frontend)
+	ctx       = context.Background()
+	rdb       *redis.Client
 	clients   = make(map[*websocket.Conn]bool)
 	broadcast = make(chan DashboardData)
-	upgrader  = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true }, // Libera CORS para o Next.js
-	}
-	mutex = &sync.Mutex{}
+	upgrader  = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	mutex     = &sync.Mutex{}
 )
 
-// --- ESTRUTURAS DE DADOS ---
-// Payload que será enviado para o Next.js
+// --- DADOS ENVIADOS AO FRONTEND ---
 type DashboardData struct {
 	HeroName       string `json:"hero_name"`
 	ClockTime      int    `json:"clock_time"`
@@ -45,14 +41,19 @@ type DashboardData struct {
 	HealthPercent  int    `json:"health_percent"`
 	ManaPercent    int    `json:"mana_percent"`
 	Gold           int    `json:"gold"`
-	BuybackStatus  string `json:"buyback_status"` // "READY", "COOLDOWN", "NO_GOLD"
+	LastHits       int    `json:"last_hits"`
+	Denies         int    `json:"denies"`
+	BuybackStatus  string `json:"buyback_status"`
 	BuybackMissing int    `json:"buyback_missing"`
 	GPM            int    `json:"gpm"`
 	KDA            string `json:"kda"`
 	WandAlert      bool   `json:"wand_alert"`
+	TpAlert        bool   `json:"tp_alert"`
+	HpRegenAlert   bool   `json:"hp_regen_alert"`   // NOVO
+	ManaRegenAlert bool   `json:"mana_regen_alert"` // NOVO
 }
 
-// Estruturas do GSI
+// --- ESTRUTURAS DO GSI (Dota) ---
 type LiveGameState struct {
 	Map    Map    `json:"map"`
 	Player Player `json:"player"`
@@ -64,12 +65,14 @@ type Map struct {
 	GameState string `json:"game_state"`
 }
 type Player struct {
-	Gold    int    `json:"gold"`
-	GPM     int    `json:"gpm"`
-	Kills   int    `json:"kills"`
-	Deaths  int    `json:"deaths"`
-	Assists int    `json:"assists"`
-	Name    string `json:"name"`
+	Gold     int    `json:"gold"`
+	GPM      int    `json:"gpm"`
+	Kills    int    `json:"kills"`
+	Deaths   int    `json:"deaths"`
+	Assists  int    `json:"assists"`
+	LastHits int    `json:"last_hits"`
+	Denies   int    `json:"denies"`
+	Name     string `json:"name"`
 }
 type Hero struct {
 	Name            string `json:"name"`
@@ -85,19 +88,20 @@ type Hero struct {
 	BuybackCooldown int    `json:"buyback_cooldown"`
 }
 type Items struct {
-	Slot0 Item `json:"slot0"`
-	Slot1 Item `json:"slot1"`
-	Slot2 Item `json:"slot2"`
-	Slot3 Item `json:"slot3"`
-	Slot4 Item `json:"slot4"`
-	Slot5 Item `json:"slot5"`
+	Slot0    Item `json:"slot0"`
+	Slot1    Item `json:"slot1"`
+	Slot2    Item `json:"slot2"`
+	Slot3    Item `json:"slot3"`
+	Slot4    Item `json:"slot4"`
+	Slot5    Item `json:"slot5"`
+	Teleport Item `json:"teleport0"`
 }
 type Item struct {
 	Name    string `json:"name"`
 	Charges int    `json:"charges"`
 }
 
-// --- ESTRATÉGIAS (Baseado no seu arquivo MD) ---
+// --- ESTRATÉGIAS ---
 type Strategy struct {
 	StartTime, EndTime int
 	Message            string
@@ -105,54 +109,41 @@ type Strategy struct {
 }
 
 var strategies = []Strategy{
-	{0, 80, "💰 META: 675 Gold (Bottle) até 1:20", false},
 	{100, 125, "💧 ALERTA: Runa de Água (Min 2)", true},
-	{170, 190, "🟡 ALERTA: Bounty Rune (Min 3)", false},
+	{165, 195, "🟡 IMPORTANTE: Bounty Rune + Watcher (Min 3)", true},
 	{230, 245, "💧 ALERTA: Runa de Água (Min 4)", true},
 	{250, 300, "⚠️ TÁTICA: Stack Triângulo (Min 5)", true},
-	{330, 360, "🗣️ COMANDO: Pedir Sup Mid -> Power Rune (6:00)", false},
-	{390, 420, "🧠 ALERTA: Altar da Sabedoria (Min 7)", true},
-	{460, 485, "⚔️ TÁTICA: Avançar wave -> Power Rune (8:00)", false},
+	{310, 360, "🔥 ALL-IN: Matar Mid (c/ Sup) -> PUSH (Catapulta) -> Runa (6:00)", true},
+	{390, 450, "🧠 ALERTA: Altar da Sabedoria (Min 7) - Não perca XP!", true},
+	{450, 490, "⚡ TÁTICA: Preparar Runa de Poder (8:00) + Watcher", false},
 	{530, 550, "🟡 ALERTA: Bounty Rune (Min 9)", false},
-	{590, 610, "⚡ ALERTA: Power Rune (Min 10)", true},
+	{590, 610, "⚡ ALERTA: Power Rune (Min 10) + Catapulta", true},
 }
 
 // --- MAIN ---
 func main() {
 	rdb = redis.NewClient(&redis.Options{Addr: RedisAddr})
-
-	fmt.Println("🚀 Dota 2 WebSocket Server Rodando!")
-	fmt.Println("📡 GSI Input: :8080/ | WebSocket Output: :8080/ws")
-
+	fmt.Println("🚀 Dota 2 Smart Coach Rodando...")
 	go startWorker()
-	go handleMessages() // Gerencia envio para o frontend
-
-	http.HandleFunc("/", handleIngest)      // Recebe do Dota
-	http.HandleFunc("/ws", handleWebSocket) // Conecta com Next.js
-
+	go handleMessages()
+	http.HandleFunc("/", handleIngest)
+	http.HandleFunc("/ws", handleWebSocket)
 	if err := http.ListenAndServe(ServerPort, nil); err != nil {
 		log.Fatal(err)
 	}
 }
 
-// --- HANDLERS HTTP/WS ---
-
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println(err)
 		return
 	}
 	defer ws.Close()
-
 	mutex.Lock()
 	clients[ws] = true
 	mutex.Unlock()
-
-	// Mantém conexão viva
 	for {
-		_, _, err := ws.ReadMessage()
-		if err != nil {
+		if _, _, err := ws.ReadMessage(); err != nil {
 			mutex.Lock()
 			delete(clients, ws)
 			mutex.Unlock()
@@ -166,7 +157,6 @@ func handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, _ := io.ReadAll(r.Body)
-	defer r.Body.Close()
 	rdb.LPush(ctx, RedisQueueKey, string(body))
 	w.WriteHeader(http.StatusOK)
 }
@@ -175,20 +165,13 @@ func handleMessages() {
 	for data := range broadcast {
 		mutex.Lock()
 		for client := range clients {
-			err := client.WriteJSON(data)
-			if err != nil {
-				client.Close()
-				delete(clients, client)
-			}
+			client.WriteJSON(data)
 		}
 		mutex.Unlock()
 	}
 }
 
-// --- WORKER ---
-
 func startWorker() {
-	fmt.Println("⚙️  Worker aguardando dados do Dota...")
 	for {
 		result, err := rdb.BRPop(ctx, 0, RedisQueueKey).Result()
 		if err != nil {
@@ -199,48 +182,102 @@ func startWorker() {
 	}
 }
 
+// Helper para verificar se existe algum item da lista no inventário
+func hasAnyItem(items Items, targetNames []string) bool {
+	slots := []Item{items.Slot0, items.Slot1, items.Slot2, items.Slot3, items.Slot4, items.Slot5}
+	for _, slot := range slots {
+		for _, target := range targetNames {
+			if strings.Contains(slot.Name, target) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func processLiveMatch(jsonStr string) {
 	var g LiveGameState
 	if err := json.Unmarshal([]byte(jsonStr), &g); err != nil {
 		return
 	}
-	if g.Map.GameState != "DOTA_GAMERULES_STATE_GAME_IN_PROGRESS" {
+	state := g.Map.GameState
+	if state == "DOTA_GAMERULES_STATE_INIT" || state == "DOTA_GAMERULES_STATE_WAIT_FOR_PLAYERS_TO_LOAD" {
 		return
 	}
 
-	// Prepara os dados para o Dashboard
 	clock := g.Map.ClockTime
 	mins, secs := clock/60, clock%60
 	if secs < 0 {
 		secs *= -1
 	}
 
-	// 1. Estratégia Atual
+	// --- ESTRATÉGIA ---
 	stratText := "Foco no Farm / Lane Control"
 	stratWarn := false
-	for _, s := range strategies {
-		if clock >= s.StartTime && clock <= s.EndTime {
-			stratText = s.Message
-			stratWarn = s.Warning
-			break
+
+	if clock >= 0 && clock <= 80 {
+		targetGold, targetLH := 675, 6
+		goldMissing := targetGold - g.Player.Gold
+		lhMissing := targetLH - g.Player.LastHits
+		if goldMissing <= 0 {
+			stratText = "✅ BOTTLE GARANTIDA! Compre agora!"
+			stratWarn = true
+		} else {
+			if lhMissing < 0 {
+				lhMissing = 0
+			}
+			stratText = fmt.Sprintf("💰 META BOTTLE: Falta %d Gold (Aprox. %d LHs)", goldMissing, lhMissing)
+		}
+	} else if state == "DOTA_GAMERULES_STATE_PRE_GAME" {
+		stratText = "⏳ PREPARAÇÃO: Cheque seus itens e posição para runas!"
+		stratWarn = true
+	} else {
+		for _, s := range strategies {
+			if clock >= s.StartTime && clock <= s.EndTime {
+				stratText = s.Message
+				stratWarn = s.Warning
+				break
+			}
 		}
 	}
 
-	// 2. Lógica de Buyback
-	bbStatus := "READY"
-	bbMissing := 0
-	surplus := g.Player.Gold - g.Hero.BuybackCost
-	if g.Hero.BuybackCooldown > 0 {
-		bbStatus = "COOLDOWN"
-	} else if surplus < 0 {
-		bbStatus = "NO_GOLD"
-		bbMissing = surplus * -1
+	// --- ALERTAS DE REGENERAÇÃO (NOVO) ---
+	hpRegenAlert := false
+	manaRegenAlert := false
+
+	// Regra HP: Antes do min 5 (300s), precisa de Bottle, Flask (Balsamo) ou Tango
+	if clock < 300 && clock > 0 {
+		// item_flask = Healing Salve
+		if !hasAnyItem(g.Items, []string{"item_bottle", "item_flask", "item_tango"}) {
+			hpRegenAlert = true
+		}
 	}
 
-	// 3. Magic Wand Check
+	// Regra Mana: Entre min 2 (120s) e min 5 (300s), precisa de Bottle, Mango ou Clarity
+	if clock >= 120 && clock < 300 {
+		// item_enchanted_mango = Mango
+		if !hasAnyItem(g.Items, []string{"item_bottle", "item_enchanted_mango", "item_clarity"}) {
+			manaRegenAlert = true
+		}
+	}
+
+	// --- BUYBACK ---
+	bbStatus := "READY"
+	bbMissing := 0
+	if g.Hero.BuybackCost > 0 {
+		surplus := g.Player.Gold - g.Hero.BuybackCost
+		if g.Hero.BuybackCooldown > 0 {
+			bbStatus = "COOLDOWN"
+		} else if surplus < 0 {
+			bbStatus = "NO_GOLD"
+			bbMissing = surplus * -1
+		}
+	}
+
+	// --- ALERTA DE WAND ---
 	wandAlert := false
 	checkWand := func(i Item) {
-		if (i.Name == "item_magic_wand" || i.Name == "item_magic_stick") && i.Charges >= 10 && g.Hero.HealthPercent < 40 {
+		if (strings.Contains(i.Name, "magic_wand") || strings.Contains(i.Name, "magic_stick")) && i.Charges >= 10 && g.Hero.HealthPercent < 40 {
 			wandAlert = true
 		}
 	}
@@ -251,9 +288,30 @@ func processLiveMatch(jsonStr string) {
 	checkWand(g.Items.Slot4)
 	checkWand(g.Items.Slot5)
 
-	// Monta o pacote
+	// --- ALERTA DE TP ---
+	tpAlert := false
+	if clock > 0 {
+		hasTP := false
+		if g.Items.Teleport.Name == "item_tpscroll" {
+			hasTP = true
+		}
+		if !hasTP {
+			if hasAnyItem(g.Items, []string{"item_travel_boots"}) {
+				hasTP = true
+			}
+		}
+		if !hasTP {
+			tpAlert = true
+		}
+	}
+
+	heroName := g.Hero.Name
+	if heroName == "" {
+		heroName = "---"
+	}
+
 	data := DashboardData{
-		HeroName:       g.Hero.Name,
+		HeroName:       heroName,
 		ClockTime:      clock,
 		ClockDisplay:   fmt.Sprintf("%02d:%02d", mins, secs),
 		StrategyText:   stratText,
@@ -261,13 +319,17 @@ func processLiveMatch(jsonStr string) {
 		HealthPercent:  g.Hero.HealthPercent,
 		ManaPercent:    g.Hero.ManaPercent,
 		Gold:           g.Player.Gold,
+		LastHits:       g.Player.LastHits,
+		Denies:         g.Player.Denies,
 		BuybackStatus:  bbStatus,
 		BuybackMissing: bbMissing,
 		GPM:            g.Player.GPM,
 		KDA:            fmt.Sprintf("%d/%d/%d", g.Player.Kills, g.Player.Deaths, g.Player.Assists),
 		WandAlert:      wandAlert,
+		TpAlert:        tpAlert,
+		HpRegenAlert:   hpRegenAlert,   // NOVO
+		ManaRegenAlert: manaRegenAlert, // NOVO
 	}
 
-	// Envia para o WebSocket
 	broadcast <- data
 }
